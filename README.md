@@ -2,7 +2,7 @@
 
 ## WIP: Experimentation on an AI NLP Conversational Interface
 
-This repository contains experimental work on developing an AI-powered Natural Language Processing (NLP) conversational interface with voice recognition capabilities.
+This repository contains experimental work on developing an AI-powered Natural Language Processing (NLP) conversational interface with voice recognition capabilities for a digital human.
 
 ## Features (Planned)
 
