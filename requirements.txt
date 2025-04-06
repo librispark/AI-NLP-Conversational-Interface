@@ -1,0 +1,16 @@
+vosk
+pyaudio # requires: brew install portaudio
+language_tool_python
+nltk
+numpy==1.21.6
+theano
+pandas
+openai
+asyncio
+PySimpleGUI
+tenacity
+pyperclip
+Pillow
+pyscreenshot
+markdown
+pywebview
