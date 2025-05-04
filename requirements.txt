@@ -2,15 +2,15 @@ vosk
 pyaudio # requires: brew install portaudio
 language_tool_python
 nltk
-numpy==1.21.6
-theano
+numpy
 pandas
 openai
 asyncio
-PySimpleGUI
+PySimpleGUI-4-foss
 tenacity
 pyperclip
 Pillow
 pyscreenshot
 markdown
 pywebview
+pynput

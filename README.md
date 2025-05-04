@@ -10,6 +10,9 @@ This repository contains experimental work on developing an AI-powered Natural L
 - Natural language understanding
 - Conversational interface
 - Text processing and punctuation restoration
+- Diarization
+- Multi-lingual support
+- Integration with audio2face-3d
 
 ## Technologies
 

@@ -9,21 +9,20 @@ import os
 import sys
 import language_tool_python
 import math
-from openai import OpenAI
-import pyscreenshot as ImageGrab
-
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_random_exponential,
-)  # for exponential backoff
+# OpenAI, tenacity, configparser moved to openai_service
+import pyscreenshot as ImageGrab # Still needed here for calling the service function
 import asyncio
-import configparser
 import pyperclip as pc
+import keyboard_shortcuts
+import threading
+import queue
+import multiprocessing
+from keyboard_shortcuts import run_keyboard_listener_process
+
+# Import the new service
+import openai_service
 
 import gui
-from punctuator2 import punctuate_return, initialize_punctuator
-from data import PUNCTUATION_VOCABULARY
 from nltk.tokenize import word_tokenize
 from nltk.tokenize import sent_tokenize
 from nltk import data, download
@@ -38,77 +37,52 @@ try:
 except LookupError:
     download('punkt_tab')
 
-config = configparser.ConfigParser()
-config.read('config.ini')
-client = OpenAI(api_key=config['openapi'].get('ApiKey'))
-# print(openai.Model.list())
+# Config and client init moved to openai_service
 
-ui = gui.InterviewGUI()
-ui.run_logic(blocking=False)
 
-init_args = initialize_punctuator('Demo-Europarl-EN.pcl')
+# Queues and Events (defined globally for access by functions/threads/processes)
+audio_results_queue = queue.Queue()
+stop_audio_event = threading.Event()
+keyboard_results_queue = multiprocessing.Queue()
 
-question_words = ["what", "why", "when", "where",
-                  "name", "is", "how", "do", "does",
-                  "which", "are", "could", "would",
-                  "should", "has", "have", "whom", "whose", "can", "don't"]
+# --- Audio Listener Thread Function ---
+def audio_listener_thread(stream, recognizer, results_queue, stop_event):
+    """Reads audio stream, performs recognition, and puts results in a queue."""
+    print("Audio listener thread started.")
+    stream.start_stream()
+    while not stop_event.is_set():
+        try:
+            data = stream.read(1024, exception_on_overflow=False)
+            if len(data) == 0:
+                # End of stream or error
+                print("Audio stream read 0 bytes, stopping audio thread.")
+                break
+            if recognizer.AcceptWaveform(data):
+                resultText = recognizer.Result()
+                resultJson = json.loads(resultText)
+                if len(resultJson.get('text', '')) > 0:
+                    results_queue.put({'type': 'final', 'text': resultJson['text']})
+            else:
+                resultText = recognizer.PartialResult()
+                resultJson = json.loads(resultText)
+                partialText = resultJson.get('partial', '')
+                if len(partialText) > 0:
+                    results_queue.put({'type': 'partial', 'text': partialText})
+        except Exception as e:
+            print(f"Error in audio thread loop: {e}")
+            # Optionally put an error message in the queue or just break
+            break # Exit loop on error
 
-paa = pyaudio.PyAudio()
-tool = language_tool_python.LanguageTool('en-US')  # use a local server (automatically set up), language English
-print(tool.correct('language tool loaded'))
+    # Cleanup before exiting thread
+    try:
+        if stream.is_active():
+            stream.stop_stream()
+        stream.close()
+    except Exception as e:
+        print(f"Error closing audio stream in thread: {e}")
+    print("Audio listener thread finished.")
+# --- End Audio Listener Thread Function ---
 
-devices = []
-device_count = paa.get_device_count()
-for i in range(device_count):
-    device = paa.get_device_info_by_index(i)
-    devices.append(device)
-    print(device)
-
-# print(devices)
-device_indexes = list(map(lambda d: d['index'], devices))
-device_names = tuple(map(lambda d: d['name'], devices))
-
-input_name_choice, form = ui.open_options_dialog(
-    'Options',
-    'Make a selection for each choice below.',
-    tuple(device_names)
-)
-
-input_name_value = form['input_name_value']
-job_title = form['job_title']
-company = form['company']
-resume = form['resume'] # potentially add for additional context
-
-ui.set_audio_input_name(input_name_value)
-ui.set_job_title_name(job_title)
-ui.set_company_name(company)
-ui.run_logic(blocking=False)
-
-# selection = input(f"Please select a device ({device_indxs})...\n")
-selection = device_indexes[device_names.index(input_name_value)] if input_name_choice=='OK' else None
-
-try:
-    selectionInt = int(selection)
-except LookupError:
-    selectionInt = -1
-    print("Input needs to be a whole number (0, 1, 2, ..etc)")
-    quit()
-
-if selectionInt not in device_indexes:
-    print(f"{selection} not available, options are {device_indexes}")
-    quit()
-
-selectedDevice = devices[selectionInt]
-sampleRate = int(selectedDevice['defaultSampleRate'])
-print(f"Selection index: {selection}, name: {selectedDevice['name']}")
-
-# model = Model(r"vosk-model-small-en-us-0.15")
-model = Model(r"vosk-model-en-us-0.42-gigaspeech")
-recognizer = KaldiRecognizer(model, sampleRate)
-print('vosk model loaded')
-
-stream = paa.open(format=pyaudio.paInt16, channels=1, rate=sampleRate, input=True, input_device_index=selectionInt, frames_per_buffer=8192)
-stream.start_stream()
 
 count = 0
 startTime = datetime.now()
@@ -116,160 +90,198 @@ previousTimePassed = datetime.now() - startTime
 loopTime = 0
 
 
-@retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(3))
-def completion_with_backoff(**kwargs):
-    return client.chat.completions.create(**kwargs)
-
-
-def ask_question_oepnai(questions, is_streamed=False):
-    questions_text = " ".join(questions)
-    response = completion_with_backoff(
-        model="gpt-4o",  # Adjust the model name to "gpt-4" or "gpt-3.5-turbo"
-        messages=[
-            # {"role": "system", "content": "You are a helpful assistant."},
-            {
-                "role": "user",
-                "content": f"You are interviewing for a role at {company} as a {job_title} and you must provide the "
-                           f"best answer to the question: {questions_text}. Summarise the answers so they can be "
-                           f"displayed on an easy to read prompter. Keep it as short as you can while conveying the "
-                           f"important points and explain thought behind answers briefly after."
-            }
-        ],
-        temperature=0.5,
-        # max_tokens=150,
-        top_p=1.0,
-        frequency_penalty=0.0,
-        presence_penalty=0.0,
-        stream=is_streamed
-    )
-    if is_streamed:
-        return response
-
-    try:
-        response_text = response["choices"][0]["text"]
-    except LookupError:
-        response_text = "Couldn't find an answer."
-
-    # print(response_text)
-    return response_text
-
-
-def code_solve_screenshot_openai():
-    im = ImageGrab.grab()
-    im.save("fullscreen.png")
-
-    with open("fullscreen.png", "rb") as image_file:
-        img_str = base64.b64encode(image_file.read()).decode('utf-8')
-
-    prompt = "Do you see a coding challenge on this page and can you solve it? If not return #nochallenge."
-
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        stream=True,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{img_str}",
-                        },
-                    },
-                ],
-            }
-        ],
-    )
-
-    os.path.exists("fullscreen.png") and os.remove("fullscreen.png")
-
-    return response
-
-
-def punctuation_readable(punctuated):
-    for punctuation in PUNCTUATION_VOCABULARY:
-        punctuated = punctuated.replace(f" {punctuation}", punctuation[0:1])
-    return punctuated
-
-
-# async def process_text_questions(input_text):
-def process_text_questions(input_text):
+# async def process_text_questions(input_text): # Keep async commented out
+def process_text_questions(input_text, company_context, job_title_context): # Add context args
     question = input_text.lower()
-    punctuated = punctuate_return(*init_args, f"{question} this is the way")
-    punctuated_replaced = punctuation_readable(punctuated)
-    # print(punctuated)
-    punctuated_replaced_tool_corrected = tool.correct(punctuated_replaced)
-    questions = list(filter(lambda s: s[-1]=='?', sent_tokenize(punctuated_replaced_tool_corrected)))
-    # question = word_tokenize(question)
+    corrected_text = tool.correct(question)
+    questions = list(filter(lambda s: s[-1]=='?', sent_tokenize(corrected_text)))
 
     if len(questions) > 0:
-        # print(f"\nQuestions1: {questions}")
         ui.set_questions(f"{' '.join(questions)}")
         ui.run_logic(blocking=False)
-        answers = ask_question_oepnai(questions, True)
-        if ui.show_prompt_window:
-            # ui.open_prompt_window('Teleprompter', answers)
+        # Call service function, passing context
+        answers = openai_service.ask_question_openai(questions, company_context, job_title_context, True)
+        if answers and ui.show_prompt_window: # Check if service call succeeded
             ui.open_prompt_window2('Teleprompter', answers)
-        report = []
-        for resp in answers:
-            if resp.choices and resp.choices[0].delta:
-                stream_text = resp.choices[0].delta.content if resp.choices[0].delta.content else ''
-                report.append(stream_text)
-                result = "".join(report).strip()
-                result = result.replace("\n", "")
-                # print(f"\r{result}", end='')
-                ui.set_answers(f"{result}")
-                ui.run_logic(blocking=False)
-        # answers = ask_question_oepnai(questions)
-        # new_line = '\n'
-        # print(f"Answers1: {answers.replace(new_line, '')}")
-
-    # if any(x in question[0] for x in question_words):
-    #     print(f"Question2: {textCorrected}?")
-    # else:
-    #     print("This is not a question!")
+            report = [] # Moved inside the check to avoid processing if no answers
+            for resp in answers:
+                if resp.choices and resp.choices[0].delta:
+                    stream_text = resp.choices[0].delta.content if resp.choices[0].delta.content else ''
+                    report.append(stream_text)
+                    result = "".join(report).strip()
+                    result = result.replace("\n", "")
+                    ui.set_answers(f"{result}")
+                    ui.run_logic(blocking=False)
+        elif not answers:
+             print("Failed to get answers from OpenAI service.") # Optional error feedback
 
 
-while True:
-    data = stream.read(1024, exception_on_overflow=False)
-    # clip = pc.paste()
-    # if clip:
-    #     ui.set_tool_detected_text(clip)
-    loopTime = (datetime.now() - startTime - previousTimePassed).microseconds / 1000
-    # print(f"{loopTime} loop time")
-    previousTimePassed = datetime.now() - startTime
-    if len(data)==0:
-        break
-    if recognizer.AcceptWaveform(data):
-        resultText = recognizer.Result()
-        resultJson = json.loads(resultText)
-        if len(resultJson['text']) > 0:
-            text = resultJson['text']
-            # print(f"{text}, l: {len(text)}")
+# ==============================================
+# ==============================================
+# Main Execution Block
+# ==============================================
+if __name__ == '__main__':
+    # --- Application Setup ---
+    paa = pyaudio.PyAudio()
+    tool = language_tool_python.LanguageTool('en-US')
+    print(tool.correct('language tool loaded'))
 
-            # asyncio.run(process_text_questions(text))
-            process_text_questions(text)
+    devices = []
+    device_count = paa.get_device_count()
+    for i in range(device_count):
+        device = paa.get_device_info_by_index(i)
+        devices.append(device)
+        print(device)
 
-            if resultJson['text']=='exit':
-                quit()
-    else:
-        resultText = recognizer.PartialResult()
-        resultJson = json.loads(resultText)
-        partialText = resultJson['partial']
-        if len(partialText) > 0:
-            # punctuated = punctuate_return(*init_args, partialText)
-            # punctuated_replaced = punctuation_readable(punctuated)
-            # print(partialText)
-            # print(f"\r{partialText}", end='')
-            # print(f"\r{punctuated_replaced}", end='')
-            ui.print_console(f"{partialText}")
+    device_indexes = list(map(lambda d: d['index'], devices))
+    device_names = tuple(map(lambda d: d['name'], devices))
 
-    if ui.run_code_solver:
-        ui.run_code_solver = False
-        response = code_solve_screenshot_openai()
-        ui.open_prompt_window2('Code Solver', response)
+    ui = gui.InterviewGUI()
+    ui.run_logic(blocking=False) # Show GUI window
 
+    input_name_choice, form = ui.open_options_dialog(
+        'Options',
+        'Make a selection for each choice below.',
+        tuple(device_names)
+    )
 
-    if ui.run_logic(blocking=False):
-        break
+    if input_name_choice != 'OK' or not form:
+        print("Options dialog cancelled or closed. Exiting.")
+        paa.terminate()
+        quit()
+
+    input_name_value = form['input_name_value']
+    job_title = form['job_title'] # These are now used as context for OpenAI calls
+    company = form['company']     # These are now used as context for OpenAI calls
+    resume = form['resume']
+
+    ui.set_audio_input_name(input_name_value)
+    ui.set_job_title_name(job_title)
+    ui.set_company_name(company)
+    ui.run_logic(blocking=False)
+
+    selection = device_indexes[device_names.index(input_name_value)]
+
+    try:
+        selectionInt = int(selection)
+    except (LookupError, TypeError):
+        print(f"Error converting selection '{selection}' to int. Exiting.")
+        paa.terminate()
+        quit()
+
+    if selectionInt not in device_indexes:
+        print(f"Selected index {selectionInt} not valid. Exiting.")
+        paa.terminate()
+        quit()
+
+    selectedDevice = devices[selectionInt]
+    sampleRate = int(selectedDevice['defaultSampleRate'])
+    print(f"Selection index: {selection}, name: {selectedDevice['name']}")
+
+    model = Model(r"vosk-model-en-us-0.42-gigaspeech")
+    recognizer = KaldiRecognizer(model, sampleRate)
+    print('vosk model loaded')
+
+    stream = paa.open(format=pyaudio.paInt16, channels=1, rate=sampleRate, input=True, input_device_index=selectionInt, frames_per_buffer=8192)
+    # --- End Application Setup ---
+
+    # --- Start Background Processes/Threads ---
+    keyboard_process = multiprocessing.Process(
+        target=run_keyboard_listener_process,
+        args=(keyboard_results_queue,),
+        daemon=True
+    )
+    keyboard_process.start()
+
+    audio_thread = threading.Thread(
+        target=audio_listener_thread,
+        args=(stream, recognizer, audio_results_queue, stop_audio_event),
+        daemon=True
+    )
+    audio_thread.start()
+    # --- End Background Processes/Threads ---
+
+    # --- Main Application Loop ---
+    try:
+        while True:
+            # Check Keyboard Shortcuts Queue
+            shortcuts_fired = keyboard_shortcuts.get_triggered_shortcuts(keyboard_results_queue)
+            if shortcuts_fired:
+                should_exit = False
+                for shortcut_id in shortcuts_fired:
+                    print(f"Processing shortcut: {shortcut_id}")
+
+                    if shortcut_id == '__EXIT__':
+                        print("Exit signal received from keyboard listener.")
+                        should_exit = True
+                        break # Exit inner shortcut processing loop
+
+                    if shortcut_id == 'action_save':
+                        print("Save action triggered (implementation pending).")
+                    elif shortcut_id == 'action_copy_clipboard':
+                        try:
+                            text_to_copy = ui.get_answers()
+                            if text_to_copy:
+                                pc.copy(text_to_copy)
+                                print(f"Copied to clipboard: {text_to_copy[:50]}...")
+                            else:
+                                print("Nothing to copy from answers field.")
+                        except Exception as e:
+                            print(f"Error copying to clipboard: {e}")
+
+                if should_exit:
+                    break # Exit main while loop
+
+            # Check Audio Results Queue
+            try:
+                audio_result = audio_results_queue.get_nowait()
+                if audio_result['type'] == 'final':
+                    text = audio_result['text']
+                    print(f"Final text received: {text}") # Keep debug print for now
+                    # Pass company and job_title context from main scope
+                    process_text_questions(text, company, job_title)
+                    if text == 'exit':
+                        break # Exit main while loop
+                elif audio_result['type'] == 'partial':
+                    partialText = audio_result['text']
+                    ui.print_console(f"{partialText}")
+
+            except queue.Empty:
+                pass # No audio result ready, continue loop
+
+            # Check for GUI actions
+            if ui.run_code_solver:
+                ui.run_code_solver = False
+                # Call service function
+                response = openai_service.code_solve_screenshot_openai()
+                if response: # Check if service call succeeded
+                    ui.open_prompt_window2('Code Solver', response)
+                else:
+                    print("Code solver screenshot analysis failed.") # Optional error feedback
+
+            # Run GUI event loop check
+            if ui.run_logic(blocking=False):
+                break # Exit main while loop if GUI closes
+
+    # --- Cleanup ---
+    finally:
+        print("Main loop exited, initiating cleanup...")
+        # Stop audio thread gracefully
+        stop_audio_event.set()
+        if 'audio_thread' in locals() and audio_thread.is_alive():
+            audio_thread.join(timeout=2)
+            if audio_thread.is_alive():
+                print("Warning: Audio thread did not exit cleanly.")
+
+        # Terminate keyboard process
+        if 'keyboard_process' in locals() and keyboard_process.is_alive():
+            print("Terminating keyboard listener process...")
+            keyboard_process.terminate()
+            keyboard_process.join(timeout=1)
+            if keyboard_process.is_alive():
+                print("Warning: Keyboard process did not terminate cleanly.")
+
+        # Cleanup PyAudio instance
+        paa.terminate()
+        print("Application finished.")
+# --- End Main Execution Block ---
