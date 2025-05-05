@@ -18,6 +18,7 @@ class InterviewGUI:
         self.event = None
         self.audio_input_names = []
         self.show_prompt_window = False
+        self.prompt_window_original_height = 320 # Store original height
         self.run_code_solver = False
         self.layout = [
             [sg.Text('Audio Source: '), sg.Text('-', key='audio_input_name')],
@@ -223,7 +224,7 @@ class InterviewGUI:
         """Creates the reusable prompt window."""
         if self.prompt_window is None or self.prompt_window.TKroot is None or self.prompt_window.TKroot.winfo_exists() == 0:
             screen_width, screen_height = sg.Window.get_screen_size()
-            prompt_window_height = 320 # Keep height or adjust as needed
+            # Use the stored original height
             self.prompt_window = sg.Window(
                 'Prompt', # Default title, will be updated
                 [
@@ -233,8 +234,8 @@ class InterviewGUI:
                 ],
                 disable_close=True, # Keep True to prevent accidental closing
                 finalize=True,      # Finalize to allow updates before first read
-                size=(screen_width, prompt_window_height), # Use screen width
-                resizable=False,
+                size=(screen_width, self.prompt_window_original_height), # Use original height
+                resizable=False,    # Set resizable to False for simplicity with this approach
                 icon=ICON,
                 alpha_channel=0.7,
                 keep_on_top=True,
@@ -296,17 +297,31 @@ class InterviewGUI:
         return # No return needed like the old method
 
     def hide_prompt_window(self):
-        """Hides the reusable prompt window if it exists."""
+        """'Hides' the reusable prompt window by resizing its height to 1."""
         if self.prompt_window and self.prompt_window.TKroot and self.prompt_window.TKroot.winfo_exists():
-            self.prompt_window.hide()
+            screen_width, _ = self.prompt_window.size # Get current width
+            try:
+                self.prompt_window.set_size((screen_width, 1))
+            except Exception as e:
+                print(f"Error resizing window in hide_prompt_window: {e}")
+                # Fallback to actual hide if resize fails
+                self.prompt_window.hide()
 
     def show_prompt_window_method(self): # Renamed to avoid conflict with instance variable
-        """Shows the reusable prompt window if it exists."""
-        # Ensure window is created if it wasn't already (e.g., toggled on before first use)
+        """'Shows' the reusable prompt window by resizing it back to original height."""
+        # Ensure window is created if it wasn't already
         self._create_prompt_window()
         if self.prompt_window and self.prompt_window.TKroot and self.prompt_window.TKroot.winfo_exists():
-            self.prompt_window.un_hide()
-            self.prompt_window.bring_to_front()
+            screen_width, _ = self.prompt_window.size # Get current width
+            try:
+                # Resize back to original height
+                self.prompt_window.set_size((screen_width, self.prompt_window_original_height))
+                # Ensure it's visible if it was hidden by fallback in hide_prompt_window
+                self.prompt_window.un_hide()
+            except Exception as e:
+                print(f"Error resizing window in show_prompt_window_method: {e}")
+                # Fallback to simple un_hide if resize fails
+                self.prompt_window.un_hide()
 
 
     # --- Old open_prompt_window2 method removed ---

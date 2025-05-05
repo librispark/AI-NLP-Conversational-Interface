@@ -270,9 +270,33 @@ if __name__ == '__main__':
             # Check for GUI actions
             if ui.run_code_solver:
                 ui.run_code_solver = False
-                # Call service function
-                response = openai_service.code_solve_screenshot_openai()
+                was_prompt_visible = ui.show_prompt_window # Check state before hiding
+
+                try:
+                    if was_prompt_visible:
+                        print("Temporarily hiding prompt window for screenshot...")
+                        ui.hide_prompt_window()
+                        # Add a small delay to ensure window is hidden before screenshot
+                        # Note: time.sleep() might block the main thread, consider asyncio.sleep if needed,
+                        # but for a short delay, this might be acceptable. Let's try without first.
+                        # import time; time.sleep(0.1) # Optional small delay
+
+                    # Call service function (which takes the screenshot)
+                    response = openai_service.code_solve_screenshot_openai()
+
+                finally:
+                    # Ensure prompt window is restored if it was visible
+                    if was_prompt_visible:
+                        print("Restoring prompt window...")
+                        ui.show_prompt_window_method()
+                        ui.run_logic(blocking=False) # Update GUI immediately after restore
+
+                # Process the response after restoring the window
                 if response: # Check if service call succeeded
+                    # Ensure prompt window is shown *before* updating content if it wasn't already
+                    if not was_prompt_visible:
+                         ui.show_prompt_window_method()
+                         ui.run_logic(blocking=False)
                     ui.update_prompt_window('Code Solver', response) # Use updated method
                 else:
                     print("Code solver screenshot analysis failed.") # Optional error feedback

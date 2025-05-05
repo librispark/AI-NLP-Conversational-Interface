@@ -58,7 +58,7 @@ def ask_question_openai(questions, company, job_title, is_streamed=False):
          # Handle this case as needed, maybe use default prompt or raise error
 
     response = completion_with_backoff(
-        model="gpt-4o",
+        model="chatgpt-4o-latest",
         messages=[
             {
                 "role": "user",
@@ -109,7 +109,7 @@ def code_solve_screenshot_openai():
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="chatgpt-4o-latest",
             stream=True,
             messages=[
                 {
@@ -120,6 +120,7 @@ def code_solve_screenshot_openai():
                             "type": "image_url",
                             "image_url": {
                                 "url": f"data:image/png;base64,{img_str}",
+                                "detail": "high" # Add detail parameter
                             },
                         },
                     ],
