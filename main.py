@@ -202,6 +202,7 @@ if __name__ == '__main__':
 
                     if shortcut_id == 'action_save':
                         print("Save action triggered (implementation pending).")
+                        ui.run_code_solver = True
                     elif shortcut_id == 'action_copy_clipboard':
                         try:
                             text_to_copy = ui.get_answers()
@@ -212,6 +213,20 @@ if __name__ == '__main__':
                                 print("Nothing to copy from answers field.")
                         except Exception as e:
                             print(f"Error copying to clipboard: {e}")
+                    elif shortcut_id == 'action_toggle_prompter':
+                        print("Toggle prompter action triggered.")
+                        # Toggle the state
+                        ui.show_prompt_window = not ui.show_prompt_window
+                        # Update the button image
+                        ui._InterviewGUI__window['prompter'].update(image_data=gui.TOGGLE_BTN_ON if ui.show_prompt_window else gui.TOGGLE_BTN_OFF)
+                        # Update the button metadata (important for the button's own logic)
+                        ui._InterviewGUI__window['prompter'].metadata["graphic_off"] = not ui.show_prompt_window
+                        # Show or hide the window
+                        if ui.show_prompt_window:
+                            ui.show_prompt_window_method()
+                        else:
+                            ui.hide_prompt_window()
+                        ui.run_logic(blocking=False) # Update GUI immediately
 
                 if should_exit:
                     break # Exit main while loop

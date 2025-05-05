@@ -17,7 +17,8 @@ active_keys = set()
 shortcuts = {
     'a+s': 'action_save',  # Example action identifier
     'Key.cmd+s': 'action_save',
-    'Key.ctrl+c': 'action_copy_clipboard' # Example
+    'Key.ctrl+c': 'action_copy_clipboard', # Example
+    'Key.shift': 'action_toggle_prompter' # New shortcut for toggling prompter
     # Add more shortcuts as needed
 }
 
