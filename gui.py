@@ -222,23 +222,29 @@ class InterviewGUI:
     def _create_prompt_window(self):
         """Creates the reusable prompt window."""
         if self.prompt_window is None or self.prompt_window.TKroot is None or self.prompt_window.TKroot.winfo_exists() == 0:
+            screen_width, screen_height = sg.Window.get_screen_size()
+            prompt_window_height = 320 # Keep height or adjust as needed
             self.prompt_window = sg.Window(
                 'Prompt', # Default title, will be updated
                 [
-                    [sg.Multiline('', font=('Arial', 16, 'bold'), size=(800, 15), key='prompt', border_width=1, wrap_lines=True, background_color='#1e1e1e')],
-                    [sg.Image(data=None, key='image')],
-                    # [sg.OK(button_text='Continue', s=10)] # Consider removing or disabling OK if not needed for reuse
+                    # Make Multiline expand horizontally and hide scrollbar
+                    [sg.Multiline('', font=('Arial', 20, 'bold'), size=(100, 13), key='prompt', border_width=1, wrap_lines=True, background_color='#1e1e1e', expand_x=True, no_scrollbar=True)],
+                    [sg.Image(data=None, key='image')]
                 ],
                 disable_close=True, # Keep True to prevent accidental closing
                 finalize=True,      # Finalize to allow updates before first read
-                size=(800, 320),
-                resizable=True,
+                size=(screen_width, prompt_window_height), # Use screen width
+                resizable=False,
                 icon=ICON,
                 alpha_channel=0.7,
                 keep_on_top=True,
                 location=(0, 0),
                 no_titlebar=False, # Ensure titlebar is present for title updates
                 grab_anywhere=True # Allow moving window easily
+                # use_default_focus=False, # Prevent automatically grabbing focus (Removed trailing comma)
+                # return_keyboard_events=False,
+                # background_color='lime green', # Set background color
+                # transparent_color='lime green' # Make this color click-through
             )
             self.prompt_window.hide() # Start hidden
             self.prompt_window.read(timeout=0) # Initial read to finalize layout
