@@ -84,7 +84,7 @@ def process_intent(input_text, intent_result, company_context, job_title_context
 
     if answers: # Check if service call succeeded
         if ui.show_prompt_window:
-            ui.open_prompt_window2('Teleprompter', answers) # Title might need adjustment based on intent
+            ui.update_prompt_window('Teleprompter', answers) # Use updated method
         else:            
             report = []
             # Correct indentation for the loop below
@@ -258,7 +258,7 @@ if __name__ == '__main__':
                 # Call service function
                 response = openai_service.code_solve_screenshot_openai()
                 if response: # Check if service call succeeded
-                    ui.open_prompt_window2('Code Solver', response)
+                    ui.update_prompt_window('Code Solver', response) # Use updated method
                 else:
                     print("Code solver screenshot analysis failed.") # Optional error feedback
 

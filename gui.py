@@ -118,6 +118,11 @@ class InterviewGUI:
             self.__window['prompter'].metadata["graphic_off"] = not self.__window['prompter'].metadata["graphic_off"]
             self.show_prompt_window = not self.__window['prompter'].metadata["graphic_off"]
             self.__window['prompter'].update(image_data=TOGGLE_BTN_ON if self.show_prompt_window else TOGGLE_BTN_OFF)
+            # Toggle visibility of the prompt window
+            if self.show_prompt_window:
+                self.show_prompt_window_method() # Renamed for clarity, maps to show_prompt_window
+            else:
+                self.hide_prompt_window()
 
         if self.event=='code_solver':
             self.run_code_solver = True
@@ -141,11 +146,16 @@ class InterviewGUI:
         self.run_logic(blocking=False)
         self.__window['Options'].update(visible=True)
         self.__window['Teleprompter'].update(visible=True)
-        while True:  # Event Loop
-            if self.run_logic():
-                break
+        try:
+            while True:  # Event Loop
+                if self.run_logic():
+                    break
+        finally:
+             # Ensure prompt window is closed if it exists
+            if self.prompt_window and self.prompt_window.TKroot and self.prompt_window.TKroot.winfo_exists():
+                self.prompt_window.close()
+            self.__window.close()
 
-        self.__window.close()
 
     def open_options_dialog(self, title, description, options):
         # print(self.values)
@@ -209,44 +219,128 @@ class InterviewGUI:
         formatted_text = formatted_text.replace("[CODEBLOCK]", "```\n").replace("[/CODEBLOCK]", "\n```")
         return formatted_text
 
-    def open_prompt_window2(self, title, answer_stream):
-        # window = webview.create_window('Code Solver', None, '<html><body></body></html>')
-        # Create the window with transparency, keep_on_top, and location
-        self.prompt_window = sg.Window(
-            title,
-            [
-                [sg.Multiline('', font=('Arial', 16, 'bold'), size=(800, 13), key='prompt', border_width=1, wrap_lines=True, background_color='#1e1e1e')],
-                [sg.Image(data=None, key='image')],
-                [sg.OK(button_text='Continue', s=10)]
-            ],
-            disable_close=True,
-            size=(800, 320),
-            resizable=True,
-            icon=ICON,
-            alpha_channel=0.7,  # Set transparency
-            keep_on_top=True,   # Keep window above others
-            location=(0, 0)     # Position at top-left corner
-        )
-        self.prompt_window.read(close=False, timeout=0)
-        self.prompt_window['prompt'].update(disabled=True)
+    def _create_prompt_window(self):
+        """Creates the reusable prompt window."""
+        if self.prompt_window is None or self.prompt_window.TKroot is None or self.prompt_window.TKroot.winfo_exists() == 0:
+            self.prompt_window = sg.Window(
+                'Prompt', # Default title, will be updated
+                [
+                    [sg.Multiline('', font=('Arial', 16, 'bold'), size=(800, 15), key='prompt', border_width=1, wrap_lines=True, background_color='#1e1e1e')],
+                    [sg.Image(data=None, key='image')],
+                    # [sg.OK(button_text='Continue', s=10)] # Consider removing or disabling OK if not needed for reuse
+                ],
+                disable_close=True, # Keep True to prevent accidental closing
+                finalize=True,      # Finalize to allow updates before first read
+                size=(800, 320),
+                resizable=True,
+                icon=ICON,
+                alpha_channel=0.7,
+                keep_on_top=True,
+                location=(0, 0),
+                no_titlebar=False, # Ensure titlebar is present for title updates
+                grab_anywhere=True # Allow moving window easily
+            )
+            self.prompt_window.hide() # Start hidden
+            self.prompt_window.read(timeout=0) # Initial read to finalize layout
+            self.prompt_window['prompt'].update(disabled=True) # Keep disabled for display
+
+    def update_prompt_window(self, title, answer_stream):
+        """Updates and shows the reusable prompt window."""
+        self._create_prompt_window() # Ensure window exists
+
+        self.prompt_window.set_title(title)
+        self.prompt_window['prompt'].update('') # Clear previous content
+        self.prompt_window.un_hide()
+        self.prompt_window.bring_to_front()
+
         report = []
         for resp in answer_stream:
+            # Check if window still exists before updating
+            if self.prompt_window is None or self.prompt_window.TKroot is None or self.prompt_window.TKroot.winfo_exists() == 0:
+                print("Prompt window closed unexpectedly during stream.")
+                break # Exit loop if window closed
+
             if resp.choices and resp.choices[0].delta:
                 stream_text = resp.choices[0].delta.content if resp.choices[0].delta.content else ''
                 report.append(stream_text)
                 result = "".join(report)
-                formatted_result = result.replace("\n", "\n")
-                # formatted_markdown = markdown.markdown(formatted_result)
-                formatted_text = self.markdown_to_rich_text(formatted_result)
-                self.prompt_window['prompt'].update(formatted_text)
-                # window.html = formatted_markdown
-                self.prompt_window.read(close=False, timeout=0)
+                formatted_text = self.markdown_to_rich_text(result) # Use existing markdown helper
+                try:
+                    self.prompt_window['prompt'].update(formatted_text)
+                    # Read with timeout to keep window responsive and check for events (like manual close if disable_close=False)
+                    event, values = self.prompt_window.read(timeout=10)
+                    if event == sg.WIN_CLOSED or event == 'Continue': # Handle potential close/continue events
+                        # If we want 'Continue' to hide the window:
+                        # self.hide_prompt_window()
+                        # break # Or just break the stream loop
+                        pass # For now, just keep updating
+                except Exception as e:
+                    print(f"Error updating prompt window: {e}")
+                    break # Stop streaming on error
+
         result = "".join(report).strip()
-        result = result.replace("\n", "")
-        self.set_answers(f"{result}")
-        # webview.start()
-        # choice, form = self.prompt_window.read(close=True)
-        return #choice, form
+        self.set_answers(f"{result}") # Update main window answers
+
+        # Decide what happens after streaming finishes. Hide? Wait for 'Continue'?
+        # For now, let's assume it stays open until explicitly hidden or closed.
+        # event, values = self.prompt_window.read() # Blocking read if we need user interaction
+        # if event == 'Continue' or event == sg.WIN_CLOSED:
+        #     self.hide_prompt_window()
+
+        return # No return needed like the old method
+
+    def hide_prompt_window(self):
+        """Hides the reusable prompt window if it exists."""
+        if self.prompt_window and self.prompt_window.TKroot and self.prompt_window.TKroot.winfo_exists():
+            self.prompt_window.hide()
+
+    def show_prompt_window_method(self): # Renamed to avoid conflict with instance variable
+        """Shows the reusable prompt window if it exists."""
+        # Ensure window is created if it wasn't already (e.g., toggled on before first use)
+        self._create_prompt_window()
+        if self.prompt_window and self.prompt_window.TKroot and self.prompt_window.TKroot.winfo_exists():
+            self.prompt_window.un_hide()
+            self.prompt_window.bring_to_front()
+
+
+    # --- Old open_prompt_window2 method removed ---
+    # def open_prompt_window2(self, title, answer_stream):
+    #     # window = webview.create_window('Code Solver', None, '<html><body></body></html>')
+    #     self.prompt_window = sg.Window(
+    #         title,
+    #         [
+    #             [sg.Multiline('', font=('Arial', 16, 'bold'), size=(800, 13), key='prompt', border_width=1, wrap_lines=True, background_color='#1e1e1e')],
+    #             [sg.Image(data=None, key='image')],
+    #             [sg.OK(button_text='Continue', s=10)]
+    #         ],
+    #         disable_close=True,
+    #         size=(800, 320),
+    #         resizable=True,
+    #         icon=ICON,
+    #         alpha_channel=0.7,  # Set transparency
+    #         keep_on_top=True,   # Keep window above others
+    #         location=(0, 0)     # Position at top-left corner
+    #     )
+    #     self.prompt_window.read(close=False, timeout=0)
+    #     self.prompt_window['prompt'].update(disabled=True)
+    #     report = []
+    #     for resp in answer_stream:
+    #         if resp.choices and resp.choices[0].delta:
+    #             stream_text = resp.choices[0].delta.content if resp.choices[0].delta.content else ''
+    #             report.append(stream_text)
+    #             result = "".join(report)
+    #             formatted_result = result.replace("\n", "\n")
+    #             # formatted_markdown = markdown.markdown(formatted_result)
+    #             formatted_text = self.markdown_to_rich_text(formatted_result)
+    #             self.prompt_window['prompt'].update(formatted_text)
+    #             # window.html = formatted_markdown
+    #             self.prompt_window.read(close=False, timeout=0)
+    #     result = "".join(report).strip()
+    #     result = result.replace("\n", "")
+    #     self.set_answers(f"{result}")
+    #     # webview.start()
+    #     # choice, form = self.prompt_window.read(close=True)
+    #     return #choice, form
 
 
 if __name__=="__main__":
