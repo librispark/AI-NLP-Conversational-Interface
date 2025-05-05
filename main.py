@@ -19,8 +19,10 @@ import queue
 import multiprocessing
 from keyboard_shortcuts import run_keyboard_listener_process
 
-# Import the new service
+# Import services
 import openai_service
+import audio_service # Add import
+import intent_service # Add import
 
 import gui
 from nltk.tokenize import word_tokenize
@@ -44,44 +46,9 @@ except LookupError:
 audio_results_queue = queue.Queue()
 stop_audio_event = threading.Event()
 keyboard_results_queue = multiprocessing.Queue()
+stop_keyboard_event = multiprocessing.Event() # Add event for keyboard process
 
-# --- Audio Listener Thread Function ---
-def audio_listener_thread(stream, recognizer, results_queue, stop_event):
-    """Reads audio stream, performs recognition, and puts results in a queue."""
-    print("Audio listener thread started.")
-    stream.start_stream()
-    while not stop_event.is_set():
-        try:
-            data = stream.read(1024, exception_on_overflow=False)
-            if len(data) == 0:
-                # End of stream or error
-                print("Audio stream read 0 bytes, stopping audio thread.")
-                break
-            if recognizer.AcceptWaveform(data):
-                resultText = recognizer.Result()
-                resultJson = json.loads(resultText)
-                if len(resultJson.get('text', '')) > 0:
-                    results_queue.put({'type': 'final', 'text': resultJson['text']})
-            else:
-                resultText = recognizer.PartialResult()
-                resultJson = json.loads(resultText)
-                partialText = resultJson.get('partial', '')
-                if len(partialText) > 0:
-                    results_queue.put({'type': 'partial', 'text': partialText})
-        except Exception as e:
-            print(f"Error in audio thread loop: {e}")
-            # Optionally put an error message in the queue or just break
-            break # Exit loop on error
-
-    # Cleanup before exiting thread
-    try:
-        if stream.is_active():
-            stream.stop_stream()
-        stream.close()
-    except Exception as e:
-        print(f"Error closing audio stream in thread: {e}")
-    print("Audio listener thread finished.")
-# --- End Audio Listener Thread Function ---
+# --- Audio Listener Thread Function moved to audio_service.py ---
 
 
 count = 0
@@ -90,20 +57,37 @@ previousTimePassed = datetime.now() - startTime
 loopTime = 0
 
 
-# async def process_text_questions(input_text): # Keep async commented out
-def process_text_questions(input_text, company_context, job_title_context): # Add context args
-    question = input_text.lower()
-    corrected_text = tool.correct(question)
-    questions = list(filter(lambda s: s[-1]=='?', sent_tokenize(corrected_text)))
+# Renamed from process_text_questions
+def process_intent(input_text, intent_result, company_context, job_title_context):
+    """Processes the recognized text based on its detected intent."""
+    # Correct the original input text
+    corrected_text = tool.correct(input_text).strip()
+    formatted_text = corrected_text # Default
 
-    if len(questions) > 0:
-        ui.set_questions(f"{' '.join(questions)}")
-        ui.run_logic(blocking=False)
-        # Call service function, passing context
-        answers = openai_service.ask_question_openai(questions, company_context, job_title_context, True)
-        if answers and ui.show_prompt_window: # Check if service call succeeded
-            ui.open_prompt_window2('Teleprompter', answers)
-            report = [] # Moved inside the check to avoid processing if no answers
+    # Format based on intent
+    if intent_result.get('has_question'):
+        if not corrected_text.endswith('?'):
+            formatted_text = corrected_text + '?'
+    elif intent_result.get('is_action_request'):
+        # Add a period for action requests for better LLM prompting
+        if not corrected_text.endswith('.'):
+             formatted_text = corrected_text + '.'
+    # else: # Neither question nor request - could add specific handling later if needed
+        # formatted_text remains corrected_text
+
+    # Update UI (consider renaming ui.set_questions later if confusing)
+    ui.set_questions(formatted_text) # Using existing UI element for now
+    ui.run_logic(blocking=False)
+
+    # Call service function, passing the single formatted text in a list
+    answers = openai_service.ask_question_openai([formatted_text], company_context, job_title_context, True)
+
+    if answers: # Check if service call succeeded
+        if ui.show_prompt_window:
+            ui.open_prompt_window2('Teleprompter', answers) # Title might need adjustment based on intent
+        else:            
+            report = []
+            # Correct indentation for the loop below
             for resp in answers:
                 if resp.choices and resp.choices[0].delta:
                     stream_text = resp.choices[0].delta.content if resp.choices[0].delta.content else ''
@@ -112,8 +96,8 @@ def process_text_questions(input_text, company_context, job_title_context): # Ad
                     result = result.replace("\n", "")
                     ui.set_answers(f"{result}")
                     ui.run_logic(blocking=False)
-        elif not answers:
-             print("Failed to get answers from OpenAI service.") # Optional error feedback
+    elif not answers:
+         print("Failed to get answers from OpenAI service.") # Optional error feedback
 
 
 # ==============================================
@@ -188,13 +172,13 @@ if __name__ == '__main__':
     # --- Start Background Processes/Threads ---
     keyboard_process = multiprocessing.Process(
         target=run_keyboard_listener_process,
-        args=(keyboard_results_queue,),
-        daemon=True
+        args=(keyboard_results_queue, stop_keyboard_event), # Pass stop event
+        daemon=True # Keep as daemon for now, might change if issues persist
     )
     keyboard_process.start()
 
     audio_thread = threading.Thread(
-        target=audio_listener_thread,
+        target=audio_service.audio_listener_thread, # Use function from audio_service
         args=(stream, recognizer, audio_results_queue, stop_audio_event),
         daemon=True
     )
@@ -237,11 +221,30 @@ if __name__ == '__main__':
                 audio_result = audio_results_queue.get_nowait()
                 if audio_result['type'] == 'final':
                     text = audio_result['text']
-                    print(f"Final text received: {text}") # Keep debug print for now
-                    # Pass company and job_title context from main scope
-                    process_text_questions(text, company, job_title)
-                    if text == 'exit':
+                    print(f"Final text received: {text}")
+
+                    # Analyze intent before processing
+                    intent_result = intent_service.analyse_text_intent(text)
+                    print(f"Intent analysis: {intent_result}") # Debug print
+
+                    if intent_result:
+                        # Only process if it's likely a question for the interview context
+                        # Process if it's a question OR an action request
+                        if intent_result.get('has_question') or intent_result.get('is_action_request'):
+                            print(f"Intent detected as {'question' if intent_result.get('has_question') else 'action request'}, processing...")
+                            # Call the renamed function and pass the intent result
+                            process_intent(text, intent_result, company, job_title)
+                        # elif intent_result.get('is_action_request'): # Combined above
+                        #     print(f"Intent detected as action request (verb: {intent_result.get('action_verb')}). Processing...")
+                        #     process_intent(text, intent_result, company, job_title)
+                        else:
+                            print("Intent not detected as question or known action. Ignoring.")
+
+                    # Check for exit command separately
+                    if text.strip().lower() == 'exit':
+                        print("Exit command received.")
                         break # Exit main while loop
+
                 elif audio_result['type'] == 'partial':
                     partialText = audio_result['text']
                     ui.print_console(f"{partialText}")
@@ -273,13 +276,15 @@ if __name__ == '__main__':
             if audio_thread.is_alive():
                 print("Warning: Audio thread did not exit cleanly.")
 
-        # Terminate keyboard process
+        # Stop keyboard process gracefully
         if 'keyboard_process' in locals() and keyboard_process.is_alive():
-            print("Terminating keyboard listener process...")
-            keyboard_process.terminate()
-            keyboard_process.join(timeout=1)
+            print("Signaling keyboard listener process to stop...")
+            stop_keyboard_event.set() # Signal the process to exit its loop
+            keyboard_process.join(timeout=2) # Wait for the process to finish
             if keyboard_process.is_alive():
-                print("Warning: Keyboard process did not terminate cleanly.")
+                print("Warning: Keyboard process did not exit cleanly after signaling. Terminating...")
+                keyboard_process.terminate() # Force terminate if join times out
+                keyboard_process.join(timeout=1) # Wait briefly for termination
 
         # Cleanup PyAudio instance
         paa.terminate()

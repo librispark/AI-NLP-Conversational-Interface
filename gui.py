@@ -211,12 +211,22 @@ class InterviewGUI:
 
     def open_prompt_window2(self, title, answer_stream):
         # window = webview.create_window('Code Solver', None, '<html><body></body></html>')
-        self.prompt_window = sg.Window(title, [
-            [sg.Multiline('', font=('Arial', 20, 'bold'), size=(
-            800, 11), key='prompt', border_width=1, wrap_lines=False, background_color='#1e1e1e')],
-            [sg.Image(data=None, key='image')],
-            [sg.OK(button_text='Continue', s=10)]
-        ], disable_close=False, size=(800, 300), resizable=True, icon=ICON)
+        # Create the window with transparency, keep_on_top, and location
+        self.prompt_window = sg.Window(
+            title,
+            [
+                [sg.Multiline('', font=('Arial', 16, 'bold'), size=(800, 13), key='prompt', border_width=1, wrap_lines=True, background_color='#1e1e1e')],
+                [sg.Image(data=None, key='image')],
+                [sg.OK(button_text='Continue', s=10)]
+            ],
+            disable_close=True,
+            size=(800, 320),
+            resizable=True,
+            icon=ICON,
+            alpha_channel=0.7,  # Set transparency
+            keep_on_top=True,   # Keep window above others
+            location=(0, 0)     # Position at top-left corner
+        )
         self.prompt_window.read(close=False, timeout=0)
         self.prompt_window['prompt'].update(disabled=True)
         report = []
@@ -235,8 +245,8 @@ class InterviewGUI:
         result = result.replace("\n", "")
         self.set_answers(f"{result}")
         # webview.start()
-        choice, form = self.prompt_window.read(close=True)
-        return choice, form
+        # choice, form = self.prompt_window.read(close=True)
+        return #choice, form
 
 
 if __name__=="__main__":

@@ -1,4 +1,5 @@
 from pynput import keyboard
+import multiprocessing # Add full import
 from multiprocessing import Queue as mpQueue
 import sys # For flushing output in process
 from pynput import keyboard
@@ -66,9 +67,11 @@ def on_release(key):
     except AttributeError:
         key_str = str(key)
 
+import time # Import time
+
     # Note: The actual exit signal ('__EXIT__') is sent on Esc *press* in on_press
 
-def run_keyboard_listener_process(output_queue):
+def run_keyboard_listener_process(output_queue, stop_event: multiprocessing.Event): # Add stop_event parameter
     """Target function for the keyboard listener process."""
     print("Keyboard listener process started.", flush=True)
 
@@ -76,13 +79,21 @@ def run_keyboard_listener_process(output_queue):
     def on_press_wrapper(key):
         on_press(key, output_queue)
 
-    # Start the pynput listener
+    # Create the listener instance without 'with'
+    listener = keyboard.Listener(on_press=on_press_wrapper, on_release=on_release)
+    listener.start()
+    print("Keyboard listener running...", flush=True)
+
     try:
-        with keyboard.Listener(on_press=on_press_wrapper, on_release=on_release) as listener:
-            listener.join()
+        # Loop checking the stop event instead of just joining
+        while not stop_event.is_set() and listener.is_alive():
+            time.sleep(0.1) # Prevent busy-waiting
     except Exception as e:
-        print(f"Error in keyboard listener process: {e}", flush=True)
+        print(f"Error in keyboard listener process loop: {e}", flush=True)
     finally:
+        print("Keyboard listener process stopping...", flush=True)
+        if listener.is_alive():
+            listener.stop()
         print("Keyboard listener process finished.", flush=True)
 
 # start_shortcut_listener removed (process started in main.py)

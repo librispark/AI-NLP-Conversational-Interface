@@ -63,7 +63,7 @@ def ask_question_openai(questions, company, job_title, is_streamed=False):
             {
                 "role": "user",
                 "content": f"You are interviewing for a role at {company} as a {job_title} and you must provide the "
-                           f"best answer to the question: {questions_text}. Summarise the answers so they can be "
+                           f"best answer to the question or request: {questions_text}. Summarise the response or answers so they can be "
                            f"displayed on an easy to read prompter. Keep it as short as you can while conveying the "
                            f"important points and explain thought behind answers briefly after."
             }
